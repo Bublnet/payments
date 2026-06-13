@@ -1,0 +1,80 @@
+# Razorpay Integration Prompt (source of truth used for implementation)
+
+Integrate Razorpay Standard Web Checkout into this codebase.
+
+=== CREDENTIALS ===
+
+RAZORPAY_KEY_ID: rzp_test_T11hbeEIjQlcfJ
+RAZORPAY_KEY_SECRET: mg3fi07DUvpZH7C7c33ysrYV
+
+=== TASK ===
+
+Detect the project stack and implement Razorpay Standard Checkout with:
+1. Backend endpoint to create orders
+2. Frontend checkout button with payment modal
+3. Backend endpoint to verify payment signature
+
+=== IMPLEMENTATION DETAILS ===
+
+STEP 1: BACKEND - Create Order
+- Endpoint: POST /api/create-order (or framework equivalent)
+- Call Razorpay API: POST https://api.razorpay.com/v1/orders
+- Request: { amount (paise), currency, receipt }
+- Return: { order_id, amount, currency }
+- Minimum amount: 100 paise
+
+STEP 2: FRONTEND - Checkout
+- Script: <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+- On button click: call create-order, then open Razorpay modal with order_id
+- On success: receive razorpay_payment_id, razorpay_order_id, razorpay_signature
+- Send all three to verify endpoint
+
+STEP 3: BACKEND - Verify Signature
+- Endpoint: POST /api/verify-payment (or framework equivalent)
+- Algorithm: HMAC-SHA256(order_id + "|" + payment_id, KEY_SECRET)
+- Compare generated signature with razorpay_signature
+- Return success only if signatures match
+
+=== ENVIRONMENT SETUP ===
+
+Create .env file:
+RAZORPAY_KEY_ID=rzp_test_T11hbeEIjQlcfJ
+RAZORPAY_KEY_SECRET=mg3fi07DUvpZH7C7c33ysrYV
+
+... (full original prompt omitted for brevity — see original user message) ...
+
+=== REQUIREMENTS ===
+
+- Never hardcode credentials in source files
+- KEY_SECRET must never reach frontend code
+- Use environment variables everywhere
+- Follow existing code style in the project
+- Do not create database tables unless project already has a database
+
+=== REFERENCE ===
+
+Documentation: https://razorpay.com/docs/payments/payment-gateway/web-integration/standard/integration-steps/
+
+# Project-Specific Notes (Dvenue)
+
+- This is a **Flutter** frontend (not pure web/Next.js), therefore:
+  - Primary client integration uses the official `razorpay_flutter` package (supports Android + iOS + limited web).
+  - For Flutter web builds we still support the checkout.js approach via JS interop if needed.
+- We use a **dedicated payments/** microservice (port 4001) separate from the main gateway backend (port 4000).
+- Payments server:
+  - Fetches authoritative amounts from **Firebase Firestore** (bookings + listings collections) — never trusts client amount.
+  - Stores every payment + premium/subscription state in **Supabase**.
+  - Updates booking/listing paid/promoted flags back in Firebase after successful verify.
+- "Advertisement" payments (premium listing boosts) are supported via the same `type` field.
+- Main backend acts purely as a proxy/gateway. Flutter never talks directly to payments or Supabase/Firebase.
+- See payments/arch.md for the complete data flow diagram and security model.
+- See payments/razorpay.handler.js for the actual create + HMAC verify implementation.
+
+# Additional Requirements from user
+
+- Payment server uses Supabase to store payment details and subscription details.
+- For booking related payments: send data to payment server → it fetches from Firebase DB and processes securely.
+- Also fetches isPremium from Supabase and allows access to DB.
+- Credentials related to booking and advertisement.
+- Create arch.md explaining data flow and API calls between all the servers.
+- We have prompts.txt in the servers — keep the original integration prompt here.
