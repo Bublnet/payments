@@ -84,6 +84,13 @@ export async function createOrder({ type = 'booking', id, userId, metadata = {} 
       listingName: listing.name || '',
       category: listing.category || '',
     };
+  } else if (type === 'premium' || type === 'subscription') {
+    // Premium access / subscription purchase (amount from client metadata or default)
+    const amount = Number(metadata?.amount || metadata?.price || 299); // default ₹299 for access period
+    if (!amount || amount < 1) throw new Error('amount (in rupees) required for premium purchase');
+    amountInPaise = Math.round(amount * 100);
+    receipt = `premium_${id || Date.now()}`;
+    notes = { ...notes, plan: metadata?.plan || 'monthly_access' };
   } else {
     // Generic / subscription payment
     const amount = Number(metadata.amount || 0);
