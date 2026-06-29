@@ -1,9 +1,9 @@
 import dotenv from 'dotenv';
 import { createPaymentsApp } from './app.js';
-import { createOrder, verifyPayment } from './razorpay.handler.js';
+import { createOrder, verifyPayment, capturePaymentByReference } from './razorpay.handler.js';
 
 dotenv.config();
-const app = createPaymentsApp({ createOrder, verifyPayment });
+const app = createPaymentsApp({ createOrder, verifyPayment, capturePaymentByReference });
 const PORT = process.env.PORT || 4001;
 
 if (!process.env.VERCEL) {

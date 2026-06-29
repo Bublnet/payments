@@ -18,6 +18,26 @@ function getRazorpay() {
   return razorpay;
 }
 
+function describeRazorpayError(error) {
+  return {
+    message: error?.message || error?.error?.description || 'Unknown Razorpay error',
+    statusCode: error?.statusCode || error?.status || error?.response?.status,
+    code: error?.error?.code || error?.code,
+    description: error?.error?.description,
+    field: error?.error?.field,
+    source: error?.error?.source,
+    step: error?.error?.step,
+    reason: error?.error?.reason,
+  };
+}
+
+function makeReceipt(prefix, id) {
+  const safePrefix = String(prefix || 'pay').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 10);
+  const safeId = String(id || 'ref').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 16);
+  const stamp = Date.now().toString(36);
+  return `${safePrefix}_${safeId}_${stamp}`.slice(0, 40);
+}
+
 /**
  * Create a Razorpay order after securely fetching authoritative data from Firebase.
  * Supports 'booking' and 'advertisement' (ad boost / premium listing) for now.
@@ -42,31 +62,36 @@ export async function createOrder({ type = 'booking', id, userId, metadata }) {
 
   if (type === 'booking') {
     // Securely fetch from Supabase (source of truth for venue pricing + booking)
-    console.log(`[PAYMENTS DB READ] Fetching booking with ID: ${id}`);
+    console.log(`[PAYMENTS CREATE-ORDER] Fetching booking id=${id} from Supabase`);
     const { data: booking, error } = await supabase.from('bookings').select('*').eq('id', id).maybeSingle();
 
     if (error) {
-      console.error(`[PAYMENTS DB READ ERROR] Fetching booking ${id} failed:`, error);
+      console.error(`[PAYMENTS CREATE-ORDER ERROR] Supabase read failed for booking ${id}:`, error);
     }
-    console.log(`[PAYMENTS DB READ SUCCESS] Booking fetch result for ${id}:`, !!booking);
-    console.log(`[PAYMENTS DB READ RESULT DETAILS]`, JSON.stringify(booking));
 
     if (error || !booking) {
       throw new Error(`Booking not found in database: ${id}`);
     }
 
     let amount = Number(booking.amount || booking.total || booking.price || 0);
+    console.log(`[PAYMENTS CREATE-ORDER] Booking record from Supabase:`, JSON.stringify({ id: booking.id, amount: booking.amount, status: booking.status, paymentStatus: booking.paymentStatus, eventDate: booking.eventDate }));
+    console.log(`[PAYMENTS CREATE-ORDER] Raw amount from DB: ${amount}  |  metadata.payment_type: ${meta.payment_type || 'none'}`);
 
     if (!amount || amount <= 0) {
       throw new Error('Invalid booking amount in database record');
     }
 
     if (meta.payment_type === 'reserve_20') {
+      const full = amount;
       amount = amount * 0.20;
+      console.log(`[PAYMENTS CREATE-ORDER] 20% reserve mode: full=${full} -> charging=${amount}`);
+    } else {
+      console.log(`[PAYMENTS CREATE-ORDER] Full payment mode: charging=${amount}`);
     }
 
     amountInPaise = Math.round(amount * 100);
-    receipt = `booking_${id}_${Date.now()}`;
+    console.log(`[PAYMENTS CREATE-ORDER] Final charge: ₹${amount} = ${amountInPaise} paise`);
+    receipt = makeReceipt('booking', id);
     notes = {
       ...notes,
       venueId: booking.venueId || booking.venue_id || '',
@@ -84,7 +109,7 @@ export async function createOrder({ type = 'booking', id, userId, metadata }) {
     const amount = Number(listing.boostPrice || listing.adPrice || 4999); // default example ₹4999
 
     amountInPaise = Math.round(amount * 100);
-    receipt = `ad_${id}_${Date.now()}`;
+    receipt = makeReceipt('ad', id);
     notes = {
       ...notes,
       listingName: listing.name || '',
@@ -95,14 +120,14 @@ export async function createOrder({ type = 'booking', id, userId, metadata }) {
     const amount = Number(process.env.PREMIUM_MONTHLY_PRICE_INR || 299);
     if (!amount || amount < 1) throw new Error('amount (in rupees) required for premium purchase');
     amountInPaise = Math.round(amount * 100);
-    receipt = `premium_${id || Date.now()}`;
+    receipt = makeReceipt('premium', id || Date.now());
     notes = { ...notes, plan: meta.plan || 'monthly_access' };
   } else {
     // Generic / subscription payment
     const amount = Number(meta.amount || 0);
     if (!amount || amount < 1) throw new Error('amount (in rupees) required for this type');
     amountInPaise = Math.round(amount * 100);
-    receipt = `${type}_${id || Date.now()}`;
+    receipt = makeReceipt(type, id || Date.now());
   }
 
   if (amountInPaise < 100) {
@@ -114,20 +139,16 @@ export async function createOrder({ type = 'booking', id, userId, metadata }) {
     currency: 'INR',
     receipt,
     notes,
-    payment_capture: 1, // auto capture
+    payment_capture: type === 'booking' ? 0 : 1, // manual capture for bookings, auto capture for others
   };
 
   let order;
   try {
     order = await getRazorpay().orders.create(orderOptions);
   } catch (e) {
-    console.warn(`Razorpay order creation failed (falling back to mock order): ${e.message}`);
-    order = {
-      id: `mock_order_${Date.now()}`,
-      amount: amountInPaise,
-      currency: 'INR',
-      receipt: receipt,
-    };
+    const details = describeRazorpayError(e);
+    console.error('[RAZORPAY CREATE-ORDER ERROR]', JSON.stringify(details));
+    throw new Error(`Razorpay order creation failed: ${details.message}`);
   }
 
   return {
@@ -249,7 +270,50 @@ export async function verifyPayment({
   };
 }
 
+export async function capturePaymentByReference(referenceId) {
+  if (!referenceId) throw new Error('referenceId is required');
+  
+  if (!isSupabaseConfigured()) throw new Error('Supabase is not configured to fetch payment details');
+
+  const { data: payment, error } = await supabase
+    .from('payments')
+    .select('*')
+    .eq('reference_id', referenceId)
+    .single();
+
+  if (error || !payment) {
+    throw new Error(`Payment record not found for reference: ${referenceId}`);
+  }
+
+  const paymentId = payment.razorpay_payment_id;
+  if (!paymentId) throw new Error('No razorpay_payment_id found in payment record');
+
+  let rpPayment;
+  try {
+    rpPayment = await getRazorpay().payments.fetch(paymentId);
+  } catch (e) {
+    throw new Error(`Failed to fetch payment from Razorpay: ${e.message}`);
+  }
+
+  if (rpPayment.status === 'captured') {
+    return { success: true, message: 'Payment was already captured', payment: rpPayment };
+  }
+  
+  if (rpPayment.status !== 'authorized') {
+    throw new Error(`Payment cannot be captured. Current status is '${rpPayment.status}'`);
+  }
+
+  try {
+    const captureResponse = await getRazorpay().payments.capture(paymentId, rpPayment.amount, rpPayment.currency);
+    await supabase.from('payments').update({ status: 'captured' }).eq('id', payment.id);
+    return { success: true, message: 'Payment captured successfully', payment: captureResponse };
+  } catch (e) {
+    throw new Error(`Razorpay capture failed: ${e.message}`);
+  }
+}
+
 export default {
   createOrder,
   verifyPayment,
+  capturePaymentByReference,
 };
