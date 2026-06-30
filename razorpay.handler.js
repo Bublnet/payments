@@ -180,13 +180,11 @@ export async function verifyPayment({
     throw new Error('Missing Razorpay payment verification fields');
   }
 
-  if (razorpay_signature !== 'mock_success_signature') {
-    // Signature verification (critical)
-    const generatedSignature = createPaymentSignature(razorpay_order_id, razorpay_payment_id, KEY_SECRET);
+  // Signature verification (critical)
+  const generatedSignature = createPaymentSignature(razorpay_order_id, razorpay_payment_id, KEY_SECRET);
 
-    if (!signaturesMatch(generatedSignature, razorpay_signature)) {
-      throw new Error('Payment signature verification failed');
-    }
+  if (!signaturesMatch(generatedSignature, razorpay_signature)) {
+    throw new Error('Payment signature verification failed');
   }
 
   // Signature OK — now persist
