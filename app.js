@@ -4,7 +4,7 @@ import { createOrder, verifyPayment } from './razorpay.handler.js';
 import { supabase } from './supabase.client.js';
 import { db } from './firebase.config.js';
 
-export function createPaymentsApp({ createOrder, verifyPayment, capturePaymentByReference }) {
+export function createPaymentsApp({ createOrder, verifyPayment, capturePaymentByReference, listPaymentsForAdmin }) {
   const app = express();
   app.use(cors());
   app.use(express.json({ limit: '1mb' }));
@@ -59,9 +59,25 @@ export function createPaymentsApp({ createOrder, verifyPayment, capturePaymentBy
     }
   };
 
+  const adminPaymentsRoute = async (req, res) => {
+    try {
+      if (!listPaymentsForAdmin) {
+        return res.status(501).json({ ok: false, message: 'Payment admin reporting is not configured.' });
+      }
+      const result = await listPaymentsForAdmin({
+        period: req.query.period || 'month',
+        limit: req.query.limit || 200,
+      });
+      return res.json({ ok: true, message: 'Payments loaded.', ...result });
+    } catch (error) {
+      return res.status(500).json({ ok: false, message: error.message || 'Could not load payments.' });
+    }
+  };
+
   app.post('/api/create-order', createRoute);
   app.post('/api/verify-payment', verifyRoute);
   app.post('/api/capture-payment', captureRoute);
+  app.get('/api/admin/payments', adminPaymentsRoute);
   app.post('/api/payments/create-order', createRoute);
   app.post('/api/payments/verify', verifyRoute);
   app.post('/api/payments/capture', captureRoute);
