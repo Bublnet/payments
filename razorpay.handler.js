@@ -433,6 +433,13 @@ function periodStart(period = "month") {
   const year = now.getUTCFullYear();
   const month = now.getUTCMonth();
   switch (period) {
+    case "week": {
+      const day = now.getUTCDay();
+      const mondayOffset = day === 0 ? 6 : day - 1;
+      return new Date(
+        Date.UTC(year, month, now.getUTCDate() - mondayOffset),
+      ).toISOString();
+    }
     case "quarter": {
       const qStart = Math.floor(month / 3) * 3;
       return new Date(Date.UTC(year, qStart, 1)).toISOString();
