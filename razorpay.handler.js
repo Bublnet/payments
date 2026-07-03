@@ -286,6 +286,8 @@ export async function verifyPayment({
           fee_paise: razorpayPayment?.fee || null,
           tax_paise: razorpayPayment?.tax || null,
           method: razorpayPayment?.method || null,
+          contact: razorpayPayment?.contact || null,
+          email: razorpayPayment?.email || null,
         },
       })
       .select()
@@ -318,13 +320,15 @@ export async function verifyPayment({
   // 2. Update source of truth in Supabase
   try {
     if (type === "booking" && referenceId) {
+      const bookingUpdate = {
+        paymentStatus: "paid",
+        paidAt: new Date().toISOString(),
+        status: "pending", // or 'paid_pending_approval' depending on your flow
+        ...(razorpayPayment?.contact ? { customerPhone: razorpayPayment.contact } : {}),
+      };
       const { data, error } = await supabase
         .from("bookings")
-        .update({
-          paymentStatus: "paid",
-          paidAt: new Date().toISOString(),
-          status: "pending", // or 'paid_pending_approval' depending on your flow
-        })
+        .update(bookingUpdate)
         .eq("id", referenceId)
         .select()
         .single();
@@ -351,6 +355,8 @@ export async function verifyPayment({
     orderId: razorpay_order_id,
     type,
     referenceId,
+    contact: razorpayPayment?.contact || null,
+    email: razorpayPayment?.email || null,
     updatedReference,
   };
 }
